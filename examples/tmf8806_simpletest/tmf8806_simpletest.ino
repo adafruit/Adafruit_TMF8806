@@ -59,9 +59,9 @@ void setup() {
   }
 
   // Configure sensor (optional - defaults work well)
-  tof.setDistanceMode(TMF8806_MODE_2_5M);  // 2.5m mode (default)
-  tof.setIterations(400);                   // 400k iterations
-  tof.setRepetitionPeriod(33);              // ~30Hz
+  tof.setDistanceMode(TMF8806_MODE_2_5M); // 2.5m mode (default)
+  tof.setIterations(400);                 // 400k iterations
+  tof.setRepetitionPeriod_ms(33);         // ~30Hz
 
   // Start continuous measurement
   if (!tof.startMeasuring(true)) {
@@ -77,16 +77,13 @@ void setup() {
 void loop() {
   if (tof.dataReady()) {
     tmf8806_result_t result;
-    if (tof.readResult(&result)) {
+    if (tof.readResult(&result) && result.reliability > 0) {
       Serial.print(F("Distance: "));
       Serial.print(result.distance);
       Serial.print(F(" mm"));
 
       Serial.print(F("  Reliability: "));
       Serial.print(result.reliability);
-
-      Serial.print(F("  Status: "));
-      Serial.print(result.status);
 
       Serial.print(F("  Temp: "));
       Serial.print(result.temperature);

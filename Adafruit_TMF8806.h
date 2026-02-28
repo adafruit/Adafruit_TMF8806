@@ -49,6 +49,19 @@
 #define TMF8806_CMD_READ_SERIAL 0x47   ///< Read serial number
 #define TMF8806_CMD_STOP 0xFF          ///< Stop measurement
 
+// Histogram support
+#define TMF8806_HISTOGRAM_BINS 128     ///< Bins per histogram
+#define TMF8806_REG_DIAG_INFO 0x1A     ///< Diagnostic info register
+#define TMF8806_REG_RESULT_NUMBER 0x20 ///< Result/histogram data start
+
+// Histogram configure command bytes (written to CMD register area)
+#define TMF8806_CMD_HIST_CFG 0x30  ///< Configure histogram readout
+#define TMF8806_CMD_HIST_READ 0x80 ///< Read histogram command ID
+#define TMF8806_CMD_CONTINUE 0x32  ///< Continue after histogram read
+
+// Interrupt bit for diagnostic (histogram ready)
+#define TMF8806_INT_DIAGNOSTIC 0x02 ///< Bit 1 of INT_STATUS
+
 // Content types
 #define TMF8806_CONTENT_CALIB 0x0A  ///< Calibration data
 #define TMF8806_CONTENT_SERIAL 0x47 ///< Serial number
@@ -61,6 +74,7 @@
 
 // Factory calibration data size
 #define TMF8806_CALIB_DATA_SIZE 14 ///< Factory calibration data size
+#define TMF8806_STATE_DATA_SIZE 11 ///< Algorithm state data size
 
 // Expected chip ID (bits [5:0])
 #define TMF8806_CHIP_ID 0x09 ///< Expected chip ID value
@@ -99,6 +113,14 @@ typedef enum {
 
 /*!
  * @brief GPIO mode selection
+ *
+ * GPIO modes are applied when startMeasuring() is called — they are part
+ * of the measurement command configuration, not a standalone register.
+ *
+ * @note GPIO0 is sampled at startup (EN rising edge) to select the I/O
+ * voltage level (>=1.5V selects 1.8-3.3V mode, <1.5V selects 1.2V mode).
+ * Ensure any external pull-up on GPIO0 for voltage selection does not
+ * conflict with the desired GPIO output mode.
  */
 typedef enum {
   TMF8806_GPIO_DISABLED = 0,           ///< GPIO disabled
@@ -112,6 +134,17 @@ typedef enum {
   TMF8806_GPIO_OD_NO_DETECT_LOW = 8,   ///< Open-drain low on no detect
   TMF8806_GPIO_OD_DETECT_LOW = 9,      ///< Open-drain low on detect
 } tmf8806_gpio_mode_t;
+
+/*!
+ * @brief Histogram type selection
+ */
+typedef enum {
+  TMF8806_HIST_ELECTRICAL_CAL = 1,  ///< Electrical calibration histogram
+  TMF8806_HIST_PROXIMITY = 4,       ///< Proximity histogram
+  TMF8806_HIST_DISTANCE = 7,        ///< Distance histogram
+  TMF8806_HIST_PILEUP = 16,         ///< Pile-up corrected histogram
+  TMF8806_HIST_PILEUP_TDC_SUM = 17, ///< Pile-up corrected TDC sum
+} tmf8806_histogram_type_t;
 
 /*!
  * @brief Measurement result structure
@@ -146,12 +179,19 @@ class Adafruit_TMF8806 {
 
   // Configuration
   void setDistanceMode(tmf8806_distance_mode_t mode);
+  tmf8806_distance_mode_t getDistanceMode();
   void setIterations(uint16_t kIters);
-  void setRepetitionPeriod(uint8_t periodMs);
-  void setThreshold(uint8_t snrThreshold);
+  uint16_t getIterations();
+  void setRepetitionPeriod_ms(uint8_t periodMs);
+  uint8_t getRepetitionPeriod_ms();
+  void setSNRThreshold(uint8_t snrThreshold);
+  uint8_t getSNRThreshold();
   void setSpadDeadTime(tmf8806_spad_deadtime_t dt);
+  tmf8806_spad_deadtime_t getSpadDeadTime();
   void setOpticalConfig(tmf8806_spad_config_t config);
+  tmf8806_spad_config_t getOpticalConfig();
   void setGPIOMode(uint8_t gpio, tmf8806_gpio_mode_t mode);
+  tmf8806_gpio_mode_t getGPIOMode(uint8_t gpio);
 
   // Calibration
   bool performFactoryCalibration();
@@ -166,6 +206,22 @@ class Adafruit_TMF8806 {
   int8_t getTemperature();
   void getVersion(uint8_t* major, uint8_t* minor, uint8_t* patch);
   bool readSerialNumber(uint8_t* serial, uint8_t len);
+
+  // Algorithm state (for power cycling)
+  bool getAlgorithmState(uint8_t* data, uint8_t len = TMF8806_STATE_DATA_SIZE);
+  bool setAlgorithmState(const uint8_t* data,
+                         uint8_t len = TMF8806_STATE_DATA_SIZE);
+  void enableAlgorithmState(bool enable);
+
+  // Histogram
+  bool configureHistogram(tmf8806_histogram_type_t type);
+  bool disableHistogram();
+  bool histogramReady();
+  bool readHistogram(uint16_t* bins);
+
+  // Low power
+  bool sleep();
+  bool wakeup();
 
  private:
   Adafruit_I2CDevice* _i2c_dev; ///< I2C device object
@@ -185,8 +241,16 @@ class Adafruit_TMF8806 {
   uint8_t _calibData[TMF8806_CALIB_DATA_SIZE]; ///< Calibration data
   bool _hasCalibData;                          ///< Have valid cal data
 
+  // Algorithm state
+  bool _useAlgState;                           ///< Use algorithm state
+  uint8_t _stateData[TMF8806_STATE_DATA_SIZE]; ///< Algorithm state data
+  bool _hasStateData;                          ///< Have valid state data
+
   // Last result temperature
   int8_t _lastTemperature; ///< Last measured temperature
+
+  // Histogram state
+  tmf8806_histogram_type_t _histType; ///< Selected histogram type
 
   // Internal methods
   bool startApp();

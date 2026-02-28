@@ -35,6 +35,8 @@ Adafruit_TMF8806::Adafruit_TMF8806() {
   _gpio1Mode = 0;
   _useCalibration = false;
   _hasCalibData = false;
+  _useAlgState = false;
+  _hasStateData = false;
   _lastTemperature = 0;
   memset(_calibData, 0, TMF8806_CALIB_DATA_SIZE);
 }
@@ -104,10 +106,22 @@ bool Adafruit_TMF8806::reset() {
 bool Adafruit_TMF8806::startMeasuring(bool continuous) {
   uint8_t cmdData[11];
 
-  // If using calibration, write cal data to 0x20 first
-  if (_useCalibration && _hasCalibData) {
+  // Write cal data and/or algorithm state to 0x20 before command
+  bool useCal = _useCalibration && _hasCalibData;
+  bool useState = _useAlgState && _hasStateData && useCal; // requires cal
+  if (useCal || useState) {
+    uint8_t cfgBuf[TMF8806_CALIB_DATA_SIZE + TMF8806_STATE_DATA_SIZE];
+    uint8_t cfgLen = 0;
+    if (useCal) {
+      memcpy(cfgBuf, _calibData, TMF8806_CALIB_DATA_SIZE);
+      cfgLen += TMF8806_CALIB_DATA_SIZE;
+    }
+    if (useState) {
+      memcpy(cfgBuf + cfgLen, _stateData, TMF8806_STATE_DATA_SIZE);
+      cfgLen += TMF8806_STATE_DATA_SIZE;
+    }
     uint8_t reg = TMF8806_REG_CONFIG;
-    if (!_i2c_dev->write(_calibData, TMF8806_CALIB_DATA_SIZE, true, &reg, 1)) {
+    if (!_i2c_dev->write(cfgBuf, cfgLen, true, &reg, 1)) {
       return false;
     }
   }
@@ -125,7 +139,7 @@ bool Adafruit_TMF8806::startMeasuring(bool continuous) {
   // bit 2: reserved (0)
   // bits 5:3: spadDeadTime
   // bits 7:6: spadSelect
-  cmdData[2] = ((_useCalibration && _hasCalibData) ? 0x01 : 0x00) |
+  cmdData[2] = (useCal ? 0x01 : 0x00) | (useState ? 0x02 : 0x00) |
                (((uint8_t)_spadDeadTime & 0x07) << 3) |
                (((uint8_t)_spadConfig & 0x03) << 6);
 
@@ -288,6 +302,10 @@ bool Adafruit_TMF8806::readResult(tmf8806_result_t* result) {
   // Crosstalk (little-endian 16-bit)
   result->crosstalk = buffer[32] | ((uint16_t)buffer[33] << 8);
 
+  // Auto-capture algorithm state data (offsets 12-22 = registers 0x28-0x32)
+  memcpy(_stateData, &buffer[12], TMF8806_STATE_DATA_SIZE);
+  _hasStateData = true;
+
   return true;
 }
 
@@ -297,6 +315,14 @@ bool Adafruit_TMF8806::readResult(tmf8806_result_t* result) {
  */
 void Adafruit_TMF8806::setDistanceMode(tmf8806_distance_mode_t mode) {
   _distanceMode = mode;
+}
+
+/*!
+ * @brief Get current distance mode
+ * @return Distance mode
+ */
+tmf8806_distance_mode_t Adafruit_TMF8806::getDistanceMode() {
+  return _distanceMode;
 }
 
 /*!
@@ -312,19 +338,43 @@ void Adafruit_TMF8806::setIterations(uint16_t kIters) {
 }
 
 /*!
+ * @brief Get current iterations setting
+ * @return Iterations in units of 1000
+ */
+uint16_t Adafruit_TMF8806::getIterations() {
+  return _kIters;
+}
+
+/*!
  * @brief Set measurement repetition period
  * @param periodMs Period in milliseconds (5-253, 0=single-shot)
  */
-void Adafruit_TMF8806::setRepetitionPeriod(uint8_t periodMs) {
+void Adafruit_TMF8806::setRepetitionPeriod_ms(uint8_t periodMs) {
   _repetitionPeriod = periodMs;
+}
+
+/*!
+ * @brief Get current repetition period
+ * @return Period in milliseconds (0=single-shot)
+ */
+uint8_t Adafruit_TMF8806::getRepetitionPeriod_ms() {
+  return _repetitionPeriod;
 }
 
 /*!
  * @brief Set SNR detection threshold
  * @param snrThreshold Threshold value (0=default which is 6)
  */
-void Adafruit_TMF8806::setThreshold(uint8_t snrThreshold) {
+void Adafruit_TMF8806::setSNRThreshold(uint8_t snrThreshold) {
   _snrThreshold = snrThreshold & 0x3F;
+}
+
+/*!
+ * @brief Get current SNR threshold
+ * @return Threshold value (0-63)
+ */
+uint8_t Adafruit_TMF8806::getSNRThreshold() {
+  return _snrThreshold;
 }
 
 /*!
@@ -336,6 +386,14 @@ void Adafruit_TMF8806::setSpadDeadTime(tmf8806_spad_deadtime_t dt) {
 }
 
 /*!
+ * @brief Get current SPAD dead time setting
+ * @return Dead time setting
+ */
+tmf8806_spad_deadtime_t Adafruit_TMF8806::getSpadDeadTime() {
+  return _spadDeadTime;
+}
+
+/*!
  * @brief Set optical stack configuration
  * @param config SPAD optical configuration
  */
@@ -344,7 +402,23 @@ void Adafruit_TMF8806::setOpticalConfig(tmf8806_spad_config_t config) {
 }
 
 /*!
- * @brief Set GPIO mode
+ * @brief Get current optical configuration
+ * @return SPAD optical configuration
+ */
+tmf8806_spad_config_t Adafruit_TMF8806::getOpticalConfig() {
+  return _spadConfig;
+}
+
+/*!
+ * @brief Set GPIO mode (applied on next startMeasuring() call)
+ *
+ * GPIO configuration is part of the measurement command and takes effect
+ * when startMeasuring() is called. There is no standalone GPIO command.
+ *
+ * @note GPIO0 is used for I/O voltage auto-detection at startup (EN rising
+ * edge). Ensure any external pull-up on GPIO0 does not conflict with the
+ * desired output mode.
+ *
  * @param gpio GPIO number (0 or 1)
  * @param mode GPIO mode
  */
@@ -354,6 +428,18 @@ void Adafruit_TMF8806::setGPIOMode(uint8_t gpio, tmf8806_gpio_mode_t mode) {
   } else if (gpio == 1) {
     _gpio1Mode = (uint8_t)mode;
   }
+}
+
+/*!
+ * @brief Get current GPIO mode
+ * @param gpio GPIO number (0 or 1)
+ * @return GPIO mode
+ */
+tmf8806_gpio_mode_t Adafruit_TMF8806::getGPIOMode(uint8_t gpio) {
+  if (gpio == 0) {
+    return (tmf8806_gpio_mode_t)_gpio0Mode;
+  }
+  return (tmf8806_gpio_mode_t)_gpio1Mode;
 }
 
 /*!
@@ -467,6 +553,51 @@ void Adafruit_TMF8806::enableCalibration(bool enable) {
   _useCalibration = enable;
 }
 
+// ============================================================================
+// Algorithm state
+// ============================================================================
+
+/*!
+ * @brief Get the algorithm state data from the last measurement result.
+ *        Save this before sleeping to restore on wakeup for faster convergence.
+ * @param data Buffer to receive state data
+ * @param len Buffer length (must be TMF8806_STATE_DATA_SIZE = 11)
+ * @return true if valid state data available, false if no measurement taken yet
+ */
+bool Adafruit_TMF8806::getAlgorithmState(uint8_t* data, uint8_t len) {
+  if (!_hasStateData || len < TMF8806_STATE_DATA_SIZE) {
+    return false;
+  }
+  memcpy(data, _stateData, TMF8806_STATE_DATA_SIZE);
+  return true;
+}
+
+/*!
+ * @brief Load algorithm state data to restore after sleep/power cycle.
+ *        Must also call enableAlgorithmState(true) and have calibration
+ *        enabled for state to be used.
+ * @param data State data buffer (11 bytes from getAlgorithmState)
+ * @param len Buffer length (must be TMF8806_STATE_DATA_SIZE = 11)
+ * @return true on success, false if len is too small
+ */
+bool Adafruit_TMF8806::setAlgorithmState(const uint8_t* data, uint8_t len) {
+  if (len < TMF8806_STATE_DATA_SIZE) {
+    return false;
+  }
+  memcpy(_stateData, data, TMF8806_STATE_DATA_SIZE);
+  _hasStateData = true;
+  return true;
+}
+
+/*!
+ * @brief Enable or disable use of algorithm state data in measurements.
+ *        Requires calibration to also be enabled (factoryCal=1 + algState=1).
+ * @param enable true to use state data, false to disable
+ */
+void Adafruit_TMF8806::enableAlgorithmState(bool enable) {
+  _useAlgState = enable;
+}
+
 /*!
  * @brief Get chip ID
  * @return Chip ID (bits [5:0] of register 0xE3)
@@ -557,6 +688,208 @@ bool Adafruit_TMF8806::readSerialNumber(uint8_t* serial, uint8_t len) {
   memcpy(serial, &buffer[10], copyLen);
 
   return true;
+}
+
+// ============================================================================
+// ============================================================================
+// Histogram support
+// ============================================================================
+
+/*!
+ * @brief Configure histogram data output
+ *
+ * Enables histogram output for the specified type. Histograms are produced
+ * alongside distance measurements and flagged via the diagnostic interrupt.
+ *
+ * @param type Histogram type to enable (electrical cal, proximity, distance,
+ *             pile-up, or pile-up TDC sum)
+ * @return true on success, false on I2C error
+ */
+bool Adafruit_TMF8806::configureHistogram(tmf8806_histogram_type_t type) {
+  _histType = type;
+
+  // Build 5-byte payload: 4-byte bitmask (little-endian) + command 0x30
+  uint32_t bitmask = (1UL << (uint8_t)type);
+  uint8_t payload[5];
+  payload[0] = bitmask & 0xFF;
+  payload[1] = (bitmask >> 8) & 0xFF;
+  payload[2] = (bitmask >> 16) & 0xFF;
+  payload[3] = (bitmask >> 24) & 0xFF;
+  payload[4] = TMF8806_CMD_HIST_CFG;
+
+  // Write to registers 0x0C through 0x10
+  uint8_t reg = 0x0C;
+  if (!_i2c_dev->write(payload, 5, true, &reg, 1)) {
+    return false;
+  }
+
+  // Wait for command acceptance
+  if (!executeCommand(TMF8806_CMD_HIST_CFG, 100)) {
+    return false;
+  }
+
+  // Enable diagnostic interrupt (bit 1)
+  Adafruit_BusIO_Register int_enab_reg =
+      Adafruit_BusIO_Register(_i2c_dev, TMF8806_REG_INT_ENAB);
+  uint8_t enab = int_enab_reg.read();
+  enab |= TMF8806_INT_DIAGNOSTIC;
+  return int_enab_reg.write(enab);
+}
+
+/*!
+ * @brief Disable histogram data output
+ * @return true on success, false on I2C error
+ */
+bool Adafruit_TMF8806::disableHistogram() {
+  // Bitmask = 0 to disable
+  uint8_t payload[5] = {0, 0, 0, 0, TMF8806_CMD_HIST_CFG};
+
+  uint8_t reg = 0x0C;
+  if (!_i2c_dev->write(payload, 5, true, &reg, 1)) {
+    return false;
+  }
+
+  if (!executeCommand(TMF8806_CMD_HIST_CFG, 100)) {
+    return false;
+  }
+
+  // Disable diagnostic interrupt (bit 1)
+  Adafruit_BusIO_Register int_enab_reg =
+      Adafruit_BusIO_Register(_i2c_dev, TMF8806_REG_INT_ENAB);
+  uint8_t enab = int_enab_reg.read();
+  enab &= ~TMF8806_INT_DIAGNOSTIC;
+  return int_enab_reg.write(enab);
+}
+
+/*!
+ * @brief Check if histogram data is ready
+ * @return true if histogram ready (bit 1 of INT_STATUS set)
+ */
+bool Adafruit_TMF8806::histogramReady() {
+  Adafruit_BusIO_Register int_status_reg =
+      Adafruit_BusIO_Register(_i2c_dev, TMF8806_REG_INT_STATUS);
+  uint8_t status = int_status_reg.read();
+  return (status & TMF8806_INT_DIAGNOSTIC) != 0;
+}
+
+/*!
+ * @brief Read histogram data from sensor
+ *
+ * Reads the first sub-histogram (128 bins) after a histogram ready interrupt.
+ * The bins array must have space for TMF8806_HISTOGRAM_BINS (128) uint16_t
+ * values.
+ *
+ * @param bins Pointer to array of 128 uint16_t values to fill
+ * @return true on success, false on I2C error or wrong content
+ */
+bool Adafruit_TMF8806::readHistogram(uint16_t* bins) {
+  // Send histogram read command
+  Adafruit_BusIO_Register command_reg =
+      Adafruit_BusIO_Register(_i2c_dev, TMF8806_REG_COMMAND);
+  if (!command_reg.write(TMF8806_CMD_HIST_READ)) {
+    return false;
+  }
+
+  // Wait for command acceptance
+  if (!executeCommand(TMF8806_CMD_HIST_READ, 100)) {
+    return false;
+  }
+
+  // Read in two chunks: first 64 bins, then second 64 bins
+  // Each chunk is 128 bytes (64 bins x 2 bytes each)
+  uint8_t rawData[128];
+
+  // === First chunk (bins 0-63) ===
+  // Read in reverse order in 32-byte blocks to avoid I2C bank switch at 0x30
+  for (int block = 3; block >= 0; block--) {
+    uint8_t addr = TMF8806_REG_RESULT_NUMBER + (block * 32);
+    if (!_i2c_dev->write_then_read(&addr, 1, &rawData[block * 32], 32)) {
+      return false;
+    }
+  }
+
+  // Convert first 64 bins (little-endian)
+  for (int i = 0; i < 64; i++) {
+    bins[i] = rawData[i * 2] | ((uint16_t)rawData[i * 2 + 1] << 8);
+  }
+
+  // Read STATE register (0x1C) to advance to next chunk
+  uint8_t stateAddr = TMF8806_REG_STATE;
+  uint8_t stateData[4];
+  if (!_i2c_dev->write_then_read(&stateAddr, 1, stateData, 4)) {
+    return false;
+  }
+
+  // === Second chunk (bins 64-127) ===
+  for (int block = 3; block >= 0; block--) {
+    uint8_t addr = TMF8806_REG_RESULT_NUMBER + (block * 32);
+    if (!_i2c_dev->write_then_read(&addr, 1, &rawData[block * 32], 32)) {
+      return false;
+    }
+  }
+
+  // Convert second 64 bins
+  for (int i = 0; i < 64; i++) {
+    bins[64 + i] = rawData[i * 2] | ((uint16_t)rawData[i * 2 + 1] << 8);
+  }
+
+  // Determine scale factor based on histogram type
+  uint8_t scale = 0;
+  if (_histType == TMF8806_HIST_PILEUP) {
+    scale = 1;
+  } else if (_histType == TMF8806_HIST_PILEUP_TDC_SUM) {
+    scale = 2;
+  } else {
+    // For other types, scale is in LSB of last raw bin
+    scale = rawData[126]; // LSB of bin 127 before conversion
+    if (scale > 8)
+      scale = 0; // Sanity check
+  }
+
+  // Apply scale factor
+  for (int i = 0; i < TMF8806_HISTOGRAM_BINS; i++) {
+    bins[i] = bins[i] << scale;
+  }
+
+  // Send CONTINUE command to allow next measurement
+  if (!command_reg.write(TMF8806_CMD_CONTINUE)) {
+    return false;
+  }
+  if (!executeCommand(TMF8806_CMD_CONTINUE, 100)) {
+    return false;
+  }
+
+  // Clear diagnostic interrupt
+  Adafruit_BusIO_Register int_status_reg =
+      Adafruit_BusIO_Register(_i2c_dev, TMF8806_REG_INT_STATUS);
+  int_status_reg.write(TMF8806_INT_DIAGNOSTIC);
+
+  return true;
+}
+
+// Low power
+// ============================================================================
+
+/*!
+ * @brief Put the sensor into low-power sleep by clearing the PON bit.
+ *        The sensor draws ~3uA in this state. Call wakeup() to resume.
+ * @return true on success, false on I2C error
+ */
+bool Adafruit_TMF8806::sleep() {
+  Adafruit_BusIO_Register enable_reg =
+      Adafruit_BusIO_Register(_i2c_dev, TMF8806_REG_ENABLE);
+  Adafruit_BusIO_RegisterBits pon_bit =
+      Adafruit_BusIO_RegisterBits(&enable_reg, 1, 0);
+  return pon_bit.write(0);
+}
+
+/*!
+ * @brief Wake the sensor from sleep and restart the measurement application.
+ *        Equivalent to the wake sequence in begin().
+ * @return true on success, false on failure
+ */
+bool Adafruit_TMF8806::wakeup() {
+  return startApp();
 }
 
 // ============================================================================
