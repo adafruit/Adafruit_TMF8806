@@ -28,6 +28,15 @@ void setup() {
 
   Serial.println(F("TMF8806 found!"));
 
+  // The ROM firmware supports up to 5m. Load the optional RAM patch before
+  // selecting 10m mode. The patch must be reloaded after a reset or power loss.
+  Serial.println(F("Loading the firmware patch for 10m mode..."));
+  if (!tof.loadFirmwarePatch()) {
+    Serial.println(F("Failed to load the firmware patch"));
+    while (1)
+      delay(10);
+  }
+
   // --- Device Info ---
   Serial.print(F("Chip ID: 0x"));
   Serial.println(tof.getChipID(), HEX);
@@ -56,9 +65,10 @@ void setup() {
   }
 
   // --- Distance Mode ---
-  tof.setDistanceMode(TMF8806_MODE_2_5M);
+  tof.setDistanceMode(TMF8806_MODE_10M);
   // Other options:
   // tof.setDistanceMode(TMF8806_MODE_SHORT_RANGE); // max 200mm
+  // tof.setDistanceMode(TMF8806_MODE_2_5M);        // max 2650mm
   // tof.setDistanceMode(TMF8806_MODE_5M);          // max 5300mm
   Serial.print(F("Distance mode: "));
   switch (tof.getDistanceMode()) {
@@ -70,6 +80,9 @@ void setup() {
       break;
     case TMF8806_MODE_5M:
       Serial.println(F("5m (max 5300mm)"));
+      break;
+    case TMF8806_MODE_10M:
+      Serial.println(F("10m (max 10000mm, firmware patch required)"));
       break;
   }
 
