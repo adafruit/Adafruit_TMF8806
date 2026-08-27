@@ -74,8 +74,8 @@ void setup() {
   Serial.println(firmwarePatch);
 
   tmf8806.setDistanceMode(TMF8806_MODE_10M);
-  tmf8806.setIterations(900);          // 900,000 integration iterations
-  tmf8806.setRepetitionPeriod_ms(100); // About 10 measurements per second
+  tmf8806.setIterations(1500);          // 1,500,000 integration iterations
+  tmf8806.setRepetitionPeriod_ms(150);  // Request one measurement every 150 ms
 
   if (!tmf8806.startMeasuring(true)) {
     showError(F("Could not start"));
