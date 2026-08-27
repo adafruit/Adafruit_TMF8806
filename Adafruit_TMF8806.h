@@ -28,6 +28,7 @@
 #define TMF8806_REG_APPREV_MINOR 0x12 ///< App minor version
 #define TMF8806_REG_APPREV_PATCH 0x13 ///< App patch version
 #define TMF8806_REG_CMD_DATA9 0x06    ///< Command data byte 9
+#define TMF8806_REG_BOOTLOADER 0x08   ///< Bootloader command and status
 #define TMF8806_REG_COMMAND 0x10      ///< Command register
 #define TMF8806_REG_STATE 0x1C        ///< State register
 #define TMF8806_REG_STATUS 0x1D       ///< Status register
@@ -38,10 +39,30 @@
 #define TMF8806_REG_INT_ENAB 0xE2     ///< Interrupt enable
 #define TMF8806_REG_ID 0xE3           ///< Chip ID register
 #define TMF8806_REG_REVID 0xE4        ///< Chip revision ID register
+#define TMF8806_REG_RESET_REASON 0xF0 ///< Reset reason and software reset
+
+// Enable and reset flags
+#define TMF8806_ENABLE_POWER_ON 0x01  ///< Power-on control flag
+#define TMF8806_ENABLE_CPU_READY 0x40 ///< CPU-ready status flag
+#define TMF8806_ENABLE_RESET 0x80     ///< CPU reset control flag
+#define TMF8806_RESET_BIT 7           ///< Software reset bit position
 
 // Application IDs
 #define TMF8806_APP_BOOTLOADER 0x80  ///< Bootloader app ID
 #define TMF8806_APP_MEASUREMENT 0xC0 ///< Measurement app ID
+
+// Bootloader commands and responses
+#define TMF8806_BL_RAM_REMAP 0x11      ///< Run uploaded RAM firmware
+#define TMF8806_BL_UPLOAD_INIT 0x14    ///< Initialize firmware upload
+#define TMF8806_BL_WRITE_RAM 0x41      ///< Write firmware data to RAM
+#define TMF8806_BL_ADDRESS_RAM 0x43    ///< Set RAM write address
+#define TMF8806_BL_BUSY 0x10           ///< Bootloader busy response
+#define TMF8806_BL_READY 0x00          ///< Bootloader ready response
+#define TMF8806_BL_CHUNK_SIZE 16       ///< Firmware upload chunk size
+#define TMF8806_BL_DEFAULT_SALT 0x29   ///< Firmware upload salt
+#define TMF8806_BL_RAM_ADDRESS 0x0000  ///< Firmware RAM base address
+#define TMF8806_BL_NO_DATA 0           ///< Empty bootloader payload length
+#define TMF8806_BL_VALID_CHECKSUM 0xFF ///< Valid response checksum
 
 // Commands
 #define TMF8806_CMD_MEASURE 0x02       ///< Start measurement
@@ -71,6 +92,19 @@
 #define TMF8806_MAX_SHORT_RANGE 200 ///< Short range max distance
 #define TMF8806_MAX_2_5M 2650       ///< 2.5m mode max distance
 #define TMF8806_MAX_5M 5300         ///< 5m mode max distance
+#define TMF8806_MAX_10M 10000       ///< 10m mode max distance
+
+// Measurement algorithm configuration flags
+#define TMF8806_ALGORITHM_DISTANCE_ENABLED 0x02 ///< Enable distance ranging
+#define TMF8806_ALGORITHM_VCSEL_CLOCK_DIV2 0x04 ///< Use half-rate VCSEL clock
+#define TMF8806_ALGORITHM_LONG_RANGE 0x08       ///< Select long-range mode
+#define TMF8806_ALGORITHM_10M_MODE 0x40         ///< Select patched 10m mode
+
+// Measurement result fields
+#define TMF8806_RESULT_RELIABILITY_MASK 0x3F   ///< Result reliability field
+#define TMF8806_RESULT_STATUS_SHIFT 6          ///< Result status field shift
+#define TMF8806_RESULT_RELIABILITY_LEVELS 64   ///< Number of reliability levels
+#define TMF8806_RESULT_RELIABILITY_HIGH_MIN 32 ///< Example high-label threshold
 
 // Factory calibration data size
 #define TMF8806_CALIB_DATA_SIZE 14 ///< Factory calibration data size
@@ -86,7 +120,18 @@ typedef enum {
   TMF8806_MODE_SHORT_RANGE = 0, ///< Short range (200mm max)
   TMF8806_MODE_2_5M = 1,        ///< 2.5m mode (default)
   TMF8806_MODE_5M = 2,          ///< 5m mode
+  TMF8806_MODE_10M = 3,         ///< 10m mode (RAM firmware patch required)
 } tmf8806_distance_mode_t;
+
+/*!
+ * @brief Measurement status with the default algorithm configuration
+ */
+typedef enum {
+  TMF8806_MEASUREMENT_NOT_INTERRUPTED = 0,   ///< Measurement completed normally
+  TMF8806_MEASUREMENT_STATUS_RESERVED_1 = 1, ///< Reserved
+  TMF8806_MEASUREMENT_INTERRUPTED_BY_GPIO = 2, ///< Delayed by GPIO input
+  TMF8806_MEASUREMENT_STATUS_RESERVED_3 = 3,   ///< Reserved
+} tmf8806_measurement_status_t;
 
 /*!
  * @brief SPAD optical configuration
@@ -150,13 +195,13 @@ typedef enum {
  * @brief Measurement result structure
  */
 typedef struct {
-  uint16_t distance;      ///< Distance in mm
-  uint8_t reliability;    ///< Reliability 0-63 (63=best, 0=no object)
-  uint8_t status;         ///< Measurement status (0-3)
-  int8_t temperature;     ///< Die temperature in C
-  uint32_t referenceHits; ///< Reference SPAD hit count
-  uint32_t objectHits;    ///< Object SPAD hit count
-  uint16_t crosstalk;     ///< Crosstalk value
+  uint16_t distance;   ///< Distance in mm
+  uint8_t reliability; ///< Reliability 0-63 (63=best, 0=no object)
+  tmf8806_measurement_status_t status; ///< Measurement completion status
+  int8_t temperature;                  ///< Die temperature in C
+  uint32_t referenceHits;              ///< Reference SPAD hit count
+  uint32_t objectHits;                 ///< Object SPAD hit count
+  uint16_t crosstalk;                  ///< Crosstalk value
 } tmf8806_result_t;
 
 /*!
@@ -169,6 +214,7 @@ class Adafruit_TMF8806 {
 
   bool begin(uint8_t addr = TMF8806_DEFAULT_ADDR, TwoWire* wire = &Wire);
   bool reset();
+  bool loadFirmwarePatch();
 
   // Measurement
   bool startMeasuring(bool continuous = true);
@@ -251,9 +297,13 @@ class Adafruit_TMF8806 {
 
   // Histogram state
   tmf8806_histogram_type_t _histType; ///< Selected histogram type
+  bool _firmwarePatchLoaded;          ///< RAM firmware patch is running
 
   // Internal methods
   bool startApp();
+  bool uploadFirmware();
+  bool sendBootloaderCommand(uint8_t command, const uint8_t* data, uint8_t len);
+  bool waitForBootloader(uint16_t timeoutMs);
   bool waitForCpuReady(uint16_t timeoutMs);
   bool waitForApp(uint16_t timeoutMs);
   bool executeCommand(uint8_t cmd, uint16_t timeoutMs);

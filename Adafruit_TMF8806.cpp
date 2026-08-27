@@ -20,6 +20,8 @@
 
 #include "Adafruit_TMF8806.h"
 
+#include "Adafruit_TMF8806_firmware.h"
+
 /*!
  * @brief Constructor for Adafruit_TMF8806
  */
@@ -38,6 +40,7 @@ Adafruit_TMF8806::Adafruit_TMF8806() {
   _useAlgState = false;
   _hasStateData = false;
   _lastTemperature = 0;
+  _firmwarePatchLoaded = false;
   memset(_calibData, 0, TMF8806_CALIB_DATA_SIZE);
 }
 
@@ -66,6 +69,8 @@ bool Adafruit_TMF8806::begin(uint8_t addr, TwoWire* wire) {
     return false;
   }
 
+  _firmwarePatchLoaded = false;
+
   // Boot into measurement app
   if (!startApp()) {
     return false;
@@ -86,16 +91,45 @@ bool Adafruit_TMF8806::begin(uint8_t addr, TwoWire* wire) {
 bool Adafruit_TMF8806::reset() {
   // Trigger soft reset via RESETREASON register bit 7
   Adafruit_BusIO_Register resetreason_reg =
-      Adafruit_BusIO_Register(_i2c_dev, 0xF0);
+      Adafruit_BusIO_Register(_i2c_dev, TMF8806_REG_RESET_REASON);
   Adafruit_BusIO_RegisterBits reset_bit =
-      Adafruit_BusIO_RegisterBits(&resetreason_reg, 1, 7);
+      Adafruit_BusIO_RegisterBits(&resetreason_reg, 1, TMF8806_RESET_BIT);
   if (!reset_bit.write(1)) {
     return false;
   }
 
   delay(5);
 
+  _firmwarePatchLoaded = false;
+
   return startApp();
+}
+
+/*!
+ * @brief Load the optional RAM firmware patch used by 10m mode
+ * @return True when the patched measurement application starts.
+ */
+bool Adafruit_TMF8806::loadFirmwarePatch() {
+  if (!_i2c_dev) {
+    return false;
+  }
+
+  _firmwarePatchLoaded = false;
+
+  Adafruit_BusIO_Register enable_reg =
+      Adafruit_BusIO_Register(_i2c_dev, TMF8806_REG_ENABLE);
+  if (!enable_reg.write(TMF8806_ENABLE_RESET | TMF8806_ENABLE_POWER_ON)) {
+    return false;
+  }
+  delay(2);
+
+  if (!enable_reg.write(TMF8806_ENABLE_POWER_ON) || !waitForCpuReady(100) ||
+      !waitForBootloader(100) || !uploadFirmware() || !startApp()) {
+    return false;
+  }
+
+  _firmwarePatchLoaded = true;
+  return true;
 }
 
 /*!
@@ -104,6 +138,10 @@ bool Adafruit_TMF8806::reset() {
  * @return true on success, false on failure
  */
 bool Adafruit_TMF8806::startMeasuring(bool continuous) {
+  if (_distanceMode == TMF8806_MODE_10M && !_firmwarePatchLoaded) {
+    return false;
+  }
+
   uint8_t cmdData[11];
 
   // Write cal data and/or algorithm state to 0x20 before command
@@ -151,11 +189,15 @@ bool Adafruit_TMF8806::startMeasuring(bool continuous) {
   // bit 4: immediateInterrupt (0)
   // bits 6:5: reserved (0)
   // bit 7: algKeepReady (0)
-  uint8_t algoConfig = 0x02; // distanceEnabled = 1
-  if (_distanceMode == TMF8806_MODE_5M) {
-    algoConfig |= 0x0C; // vcselClkDiv2=1, distanceMode=1
+  uint8_t algoConfig = TMF8806_ALGORITHM_DISTANCE_ENABLED;
+  if (_distanceMode == TMF8806_MODE_5M || _distanceMode == TMF8806_MODE_10M) {
+    algoConfig |=
+        TMF8806_ALGORITHM_VCSEL_CLOCK_DIV2 | TMF8806_ALGORITHM_LONG_RANGE;
+    if (_distanceMode == TMF8806_MODE_10M) {
+      algoConfig |= TMF8806_ALGORITHM_10M_MODE;
+    }
   } else if (_distanceMode == TMF8806_MODE_SHORT_RANGE) {
-    algoConfig = 0x00; // distanceEnabled = 0 for short range only
+    algoConfig = 0; // Distance ranging off for short-range proximity only
   }
   cmdData[3] = algoConfig;
 
@@ -272,8 +314,9 @@ bool Adafruit_TMF8806::readResult(tmf8806_result_t* result) {
   // Offset 28-31 = OBJECT_HITS (0x38-0x3B)
   // Offset 32-33 = XTALK (0x3C-0x3D)
 
-  result->reliability = buffer[5] & 0x3F;
-  result->status = (buffer[5] >> 6) & 0x03;
+  result->reliability = buffer[5] & TMF8806_RESULT_RELIABILITY_MASK;
+  result->status =
+      (tmf8806_measurement_status_t)(buffer[5] >> TMF8806_RESULT_STATUS_SHIFT);
 
   // Distance (little-endian)
   result->distance = buffer[6] | ((uint16_t)buffer[7] << 8);
@@ -311,7 +354,7 @@ bool Adafruit_TMF8806::readResult(tmf8806_result_t* result) {
 
 /*!
  * @brief Set distance mode
- * @param mode Distance mode (short range, 2.5m, or 5m)
+ * @param mode Distance mode (short range, 2.5m, 5m, or patched 10m)
  */
 void Adafruit_TMF8806::setDistanceMode(tmf8806_distance_mode_t mode) {
   _distanceMode = mode;
@@ -889,6 +932,9 @@ bool Adafruit_TMF8806::sleep() {
  * @return true on success, false on failure
  */
 bool Adafruit_TMF8806::wakeup() {
+  if (_firmwarePatchLoaded) {
+    return loadFirmwarePatch();
+  }
   return startApp();
 }
 
@@ -920,18 +966,14 @@ bool Adafruit_TMF8806::startApp() {
     return false;
   }
 
-  // Request measurement application
-  Adafruit_BusIO_Register appreqid_reg =
-      Adafruit_BusIO_Register(_i2c_dev, TMF8806_REG_APPREQID);
-  if (!appreqid_reg.write(TMF8806_APP_MEASUREMENT)) {
-    return false;
-  }
-
-  delay(10);
-
-  // Wait for app to start
-  if (!waitForApp(100)) {
-    return false;
+  Adafruit_BusIO_Register appid_reg =
+      Adafruit_BusIO_Register(_i2c_dev, TMF8806_REG_APPID);
+  if (appid_reg.read() != TMF8806_APP_MEASUREMENT) {
+    Adafruit_BusIO_Register appreqid_reg =
+        Adafruit_BusIO_Register(_i2c_dev, TMF8806_REG_APPREQID);
+    if (!appreqid_reg.write(TMF8806_APP_MEASUREMENT) || !waitForApp(100)) {
+      return false;
+    }
   }
 
   // Enable result interrupt
@@ -951,6 +993,109 @@ bool Adafruit_TMF8806::startApp() {
   }
 
   return true;
+}
+
+/*!
+ * @brief Upload the bundled firmware patch through the bootloader
+ *
+ * @return true if the patched application started
+ */
+bool Adafruit_TMF8806::uploadFirmware() {
+  const uint8_t salt = TMF8806_BL_DEFAULT_SALT;
+  const uint8_t address[] = {lowByte(TMF8806_BL_RAM_ADDRESS),
+                             highByte(TMF8806_BL_RAM_ADDRESS)};
+  uint8_t chunk[TMF8806_BL_CHUNK_SIZE];
+
+  if (!sendBootloaderCommand(TMF8806_BL_UPLOAD_INIT, &salt, 1) ||
+      !sendBootloaderCommand(TMF8806_BL_ADDRESS_RAM, address,
+                             sizeof(address))) {
+    return false;
+  }
+
+  for (uint16_t offset = 0; offset < TMF8806_FIRMWARE_SIZE;
+       offset += TMF8806_BL_CHUNK_SIZE) {
+    uint8_t chunkSize = min((uint16_t)TMF8806_BL_CHUNK_SIZE,
+                            (uint16_t)(TMF8806_FIRMWARE_SIZE - offset));
+    for (uint8_t i = 0; i < chunkSize; i++) {
+      chunk[i] = pgm_read_byte(&tmf8806_firmware[offset + i]);
+    }
+    if (!sendBootloaderCommand(TMF8806_BL_WRITE_RAM, chunk, chunkSize)) {
+      return false;
+    }
+  }
+
+  // RAM remap restarts the CPU, so there is no bootloader response to read.
+  uint8_t packet[] = {TMF8806_BL_RAM_REMAP, TMF8806_BL_NO_DATA,
+                      (uint8_t)~TMF8806_BL_RAM_REMAP};
+  uint8_t reg = TMF8806_REG_BOOTLOADER;
+  if (!_i2c_dev->write(packet, sizeof(packet), true, &reg, 1)) {
+    return false;
+  }
+  return waitForCpuReady(200) && waitForApp(200);
+}
+
+/*!
+ * @brief Send one checksummed bootloader command
+ * @param command Bootloader command identifier
+ * @param data Command payload
+ * @param len Payload size in bytes.
+ * @return True when the bootloader accepts the command
+ */
+bool Adafruit_TMF8806::sendBootloaderCommand(uint8_t command,
+                                             const uint8_t* data, uint8_t len) {
+  if (len > TMF8806_BL_CHUNK_SIZE || (len > 0 && !data)) {
+    return false;
+  }
+
+  uint8_t packet[TMF8806_BL_CHUNK_SIZE + 3];
+  uint8_t checksum = command + len;
+  packet[0] = command;
+  packet[1] = len;
+  for (uint8_t i = 0; i < len; i++) {
+    packet[i + 2] = data[i];
+    checksum += data[i];
+  }
+  packet[len + 2] = ~checksum;
+
+  uint8_t reg = TMF8806_REG_BOOTLOADER;
+  if (!_i2c_dev->write(packet, len + 3, true, &reg, 1)) {
+    return false;
+  }
+
+  uint32_t startMs = millis();
+  while ((millis() - startMs) < 20) {
+    uint8_t response[3];
+    if (!_i2c_dev->write_then_read(&reg, 1, response, sizeof(response))) {
+      return false;
+    }
+    if (response[0] >= TMF8806_BL_BUSY) {
+      delay(1);
+      continue;
+    }
+    return response[0] == TMF8806_BL_READY &&
+           response[1] == TMF8806_BL_NO_DATA &&
+           (uint8_t)(response[0] + response[1] + response[2]) ==
+               TMF8806_BL_VALID_CHECKSUM;
+  }
+  return false;
+}
+
+/*!
+ * @brief Wait for the bootloader application
+ * @param timeoutMs Timeout in milliseconds
+ * @return True when the bootloader is running
+ */
+bool Adafruit_TMF8806::waitForBootloader(uint16_t timeoutMs) {
+  Adafruit_BusIO_Register appid_reg =
+      Adafruit_BusIO_Register(_i2c_dev, TMF8806_REG_APPID);
+  uint32_t startMs = millis();
+  while ((millis() - startMs) < timeoutMs) {
+    if (appid_reg.read() == TMF8806_APP_BOOTLOADER) {
+      return true;
+    }
+    delay(1);
+  }
+  return false;
 }
 
 /*!
@@ -1038,6 +1183,8 @@ uint16_t Adafruit_TMF8806::getMaxDistance() {
       return TMF8806_MAX_SHORT_RANGE;
     case TMF8806_MODE_5M:
       return TMF8806_MAX_5M;
+    case TMF8806_MODE_10M:
+      return TMF8806_MAX_10M;
     case TMF8806_MODE_2_5M:
     default:
       return TMF8806_MAX_2_5M;
