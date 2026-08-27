@@ -1,4 +1,4 @@
 var searchData=
 [
-  ['objecthits',['objectHits',['../structtmf8806__result__t.html#ae906532a159762b383bedc0763a8924b',1,'tmf8806_result_t']]]
+  ['loadfirmwarepatch',['loadFirmwarePatch',['../class_adafruit___t_m_f8806.html#a01135d3259ee649e8112e685b1987f6b',1,'Adafruit_TMF8806']]]
 ];

@@ -87,6 +87,9 @@ Public Member Functions</h2></td></tr>
 <tr class="memitem:a1ab3e1c8b75b0960a9106666d18efb85"><td class="memItemLeft" align="right" valign="top">bool&#160;</td><td class="memItemRight" valign="bottom"><a class="el" href="class_adafruit___t_m_f8806.html#a1ab3e1c8b75b0960a9106666d18efb85">reset</a> ()</td></tr>
 <tr class="memdesc:a1ab3e1c8b75b0960a9106666d18efb85"><td class="mdescLeft">&#160;</td><td class="mdescRight">Software reset the sensor.  <a href="#a1ab3e1c8b75b0960a9106666d18efb85">More...</a><br /></td></tr>
 <tr class="separator:a1ab3e1c8b75b0960a9106666d18efb85"><td class="memSeparator" colspan="2">&#160;</td></tr>
+<tr class="memitem:a01135d3259ee649e8112e685b1987f6b"><td class="memItemLeft" align="right" valign="top">bool&#160;</td><td class="memItemRight" valign="bottom"><a class="el" href="class_adafruit___t_m_f8806.html#a01135d3259ee649e8112e685b1987f6b">loadFirmwarePatch</a> ()</td></tr>
+<tr class="memdesc:a01135d3259ee649e8112e685b1987f6b"><td class="mdescLeft">&#160;</td><td class="mdescRight">Load the optional RAM firmware patch used by 10m mode.  <a href="#a01135d3259ee649e8112e685b1987f6b">More...</a><br /></td></tr>
+<tr class="separator:a01135d3259ee649e8112e685b1987f6b"><td class="memSeparator" colspan="2">&#160;</td></tr>
 <tr class="memitem:a8d6aab9436d83a1e7a48ff1f8139713f"><td class="memItemLeft" align="right" valign="top">bool&#160;</td><td class="memItemRight" valign="bottom"><a class="el" href="class_adafruit___t_m_f8806.html#a8d6aab9436d83a1e7a48ff1f8139713f">startMeasuring</a> (bool continuous=true)</td></tr>
 <tr class="memdesc:a8d6aab9436d83a1e7a48ff1f8139713f"><td class="mdescLeft">&#160;</td><td class="mdescRight">Start distance measurement.  <a href="#a8d6aab9436d83a1e7a48ff1f8139713f">More...</a><br /></td></tr>
 <tr class="separator:a8d6aab9436d83a1e7a48ff1f8139713f"><td class="memSeparator" colspan="2">&#160;</td></tr>
@@ -260,6 +263,26 @@ Public Member Functions</h2></td></tr>
 
 </div>
 </div>
+<a id="a01135d3259ee649e8112e685b1987f6b"></a>
+<h2 class="memtitle"><span class="permalink"><a href="#a01135d3259ee649e8112e685b1987f6b">&#9670;&nbsp;</a></span>loadFirmwarePatch()</h2>
+
+<div class="memitem">
+<div class="memproto">
+      <table class="memname">
+        <tr>
+          <td class="memname">bool Adafruit_TMF8806::loadFirmwarePatch </td>
+          <td>(</td>
+          <td class="paramname"></td><td>)</td>
+          <td></td>
+        </tr>
+      </table>
+</div><div class="memdoc">
+
+<p>Load the optional RAM firmware patch used by 10m mode. </p>
+<dl class="section return"><dt>Returns</dt><dd>True when the patched measurement application starts. </dd></dl>
+
+</div>
+</div>
 <a id="a8d6aab9436d83a1e7a48ff1f8139713f"></a>
 <h2 class="memtitle"><span class="permalink"><a href="#a8d6aab9436d83a1e7a48ff1f8139713f">&#9670;&nbsp;</a></span>startMeasuring()</h2>
 
@@ -393,7 +416,7 @@ Public Member Functions</h2></td></tr>
 <p>Set distance mode. </p>
 <dl class="params"><dt>Parameters</dt><dd>
   <table class="params">
-    <tr><td class="paramname">mode</td><td>Distance mode (short range, 2.5m, or 5m) </td></tr>
+    <tr><td class="paramname">mode</td><td>Distance mode (short range, 2.5m, 5m, or patched 10m) </td></tr>
   </table>
   </dd>
 </dl>
